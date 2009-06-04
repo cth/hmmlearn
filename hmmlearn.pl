@@ -9,7 +9,11 @@
 	trans/3, emit/3.
 
 % Initialize time constraints from sequence
-sequence(S) <=> length(S,L) | sequence_length(L), sequence(1,S). % Add Time counter
+sequence(S) <=>
+    length(S,L)
+    |
+    sequence_length(L), sequence(1,S). % Add Time counter
+
 sequence(_,[]) <=> true. % Recursion termination
 sequence(Time,[Elem|R]) <=> % Add an input constraint for each symbol
     NextTime is Time + 1
@@ -28,35 +32,40 @@ init_counts <=> time(0). % Initialization done -> begin simulation...
 state(X,Y) \ state(X,Y) <=> true. % dup. elim.
 trans(X,_,_) ==> state(X, start). % X is a potential end state
 trans(_,X,_) \ state(X, start) <=> true. % X cannot be a start state
-state(_X,start), state(_Y,start) <=> false. % Multiple start-states not permitted
+state(_X,start), state(_Y,start) <=> false. % No multiple start-states
 trans(_,X, _) ==> state(X,end). % X is a potential end state
 trans(X,_,_) \ state(X,end) <=> true. % X cannot be an end state
 
-
 elim_dup_time @ time(X) \ time(X) <=> true. % dup. elim.
 
-state(State,start) ==> reachable(0,State). % Start state is always reachable at time 0
+% Start state is always reachable at time 0
+state(State,start) ==> reachable(0,State). 
 
-% Find all reachable next states (there may be duplicates, which is intensional).
+% Find all reachable next states (preserve duplicates).
 time(Time), reachable(Time, State), trans(State,NextState,_) ==>
-     NextTime is Time + 1 | reachable(NextTime,NextState).
+    NextTime is Time + 1 | reachable(NextTime,NextState).
 
-% For each state reachable from the start state, add a transition count (but no emit count!).
+% For each state reachable from the start state,
+%   add a transition count (but no emit count!).
 start_state_transitions @
 state(State,start), trans(State,NextState,_) \
-reachable(1, NextState), trans_count(State,NextState,TransCount), trans_total(State,TotalTransCount) <=>
+reachable(1, NextState),
+trans_count(State,NextState,TransCount), trans_total(State,TotalTransCount) <=>
      NextTransCount is TransCount + 1,
      NextTotalTransCount is TotalTransCount + 1
      |
      trans_count(State,NextState,NextTransCount),
      trans_total(State, NextTotalTransCount).
 
-% The main counting rule. Each possible state transition that will result in emission 
-% corresponding to input at given time, as well as the emission it self are counted.
-% Note, this rule does not follow transitions to the end state
+start_state_processed @
+state(State,start), trans_total(State,Total) \ time(0) <=> Total > 0 | time(1).
+
+% The main counting rule. Each possible state transition that will result in
+% emission corresponding to input at given time, as well as the emission it
+% self are counted. This rule does not follow transitions to the end state.
 count_transitions_and_emissions @
 time(Time), input(Time,Symbol),
-trans(State,NextState,_), trans(NextState, _,_) \ % Make sure it not a dead-end (end-state)
+trans(State,NextState,_), trans(NextState, _,_) \ % No end states
 reachable(Time,State), % Eat one reachable constraint
 trans_count(State,NextState,TransCount), trans_total(State,TotalTransCount),
 emit_count(State, Symbol,EmitCount), emit_total(State,TotalEmitCount) <=>
@@ -73,17 +82,19 @@ emit_count(State, Symbol,EmitCount), emit_total(State,TotalEmitCount) <=>
      trans_count(State,NextState,NextTransCount),
      trans_total(State, NextTotalTransCount).
 
-% Transition to end states or accepting states (no emission)
-% If it is not handled by previous rule, it must be end-state or unreachable by constraint:
+% Transition to end states or accepting states (no emission). If it is not
+% handled by previous rule, it must be end-state or unreachable by constraint:
 % This rules handles the first case.
 end_state_transitions @
-time(Time), state(Time,State), trans(State,EndState,_), sequence_length(Time), state(EndState,end) \
-reachable(Time, State), trans_count(State, EndState, _), trans_total(State,TotalTransCount) <=>
+time(Time), state(Time,State), trans(State,EndState,_),
+sequence_length(Time), state(EndState,end) \
+reachable(Time, State),
+trans_count(State, EndState, _), trans_total(State,TotalTransCount) <=>
      NextTotalTransCount is TotalTransCount + 1
      |
      trans_count(State, EndState, 1), trans_total(State, NextTotalTransCount).
 
-% If a constraint prohibits a certain transition, then we have too many reachable constraints
+% Remove disallowed transitions/unreachable states
 remove_unreachable @ time(Time) \ reachable(Time,_) <=> true.
 
 increase_time_step @
@@ -99,12 +110,14 @@ normalize \ trans_total(_,0) <=> true.
 normalize \ emit_count(_,_,0) <=> true.
 normalize \ emit_total(_,0) <=> true.
 
-normalize, trans_total(S1,CT) \ trans(S1,S2,_OldProb), trans_count(S1,S2,C) <=>
+normalize, trans_total(S1,CT) \
+trans(S1,S2,_OldProb), trans_count(S1,S2,C) <=>
     Probability is C / CT
     |
     trans(S1,S2,Probability).
 
-normalize, emit_total(State,CT) \ emit(State,Symbol,_OldProb), emit_count(State,Symbol,C) <=>
+normalize, emit_total(State,CT) \
+emit(State,Symbol,_OldProb), emit_count(State,Symbol,C) <=>
     Probability is C / CT
     |
     emit(State,Symbol,Probability).
