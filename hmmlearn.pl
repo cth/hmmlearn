@@ -6,7 +6,8 @@
 	trans/3, emit/3, % Defining the structure of the HMM
 	sequence/1,  % The training sequence
 	sequence/2,sequence_length/1,input/2, % Derived from traing sequence
-	history_size/1, emission_history/2,
+	history_size/1, future_size/1,
+	emission_history/2, emission_future/3,
 	cleanup/1, 
 	time/1, nexttime/1, 
 	% derived from trans relations	
@@ -18,27 +19,56 @@
         % Counters	
 	count/4, total/3, 
 	% Program phases:
-	countphase/0, expandphase/0, normphase/0, totalphase/0,
+	countphase/0, expandphase/0, normphase/0, totalphase/0, backwardsphase/0,
 	% Final derived probabilities
-	derived_trans/3, derived_emit/3, 
+	derived_trans/3, derived_emit/3,
 	option/1, init/0.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Side constraints
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-check_path_constraints(NextState,
-		       [State|History],
-		       EmissionHistory,
-		       Constraints,
-		       Constraints) :-
-	write(check_path_constraints(NextState,
-	    [State|History],EmissionHistory,Constraints)),
+% Finds and checks all constraints for a path
+check_path_constraints(NextTime, NextState,[State|History],
+		       NextEmission,EmissionHistory,EmissionFuture,
+		       Constraints,UpdConstraints) :-
+	write('check_constraints'),nl,
+	user_constraints(ConstraintGoals),
+	check_user_constraint(ConstraintGoals,NextTime,
+			      NextState,[State|History],
+			      NextEmission,EmissionHistory,EmissionFuture,
+			      Constraints,UpdConstraints).
+
+% Check individual constraint goals specified by user
+check_user_constraint([],_,_,_,_,_,_,C,C).
+check_user_constraint([GoalFunctor|R],NextTime, NextState,[State|History],
+		      NextEmission,EmissionHistory,EmissionFuture,
+		      Constraints,UpdConstraints) :-
+	Goal =.. [GoalFunctor|[NextTime, NextState,[State|History],
+		      NextEmission,EmissionHistory,EmissionFuture,
+		      Constraints,ConstraintsOut]],
+	call(Goal),
+	check_user_constraint(R,
+		      NextTime, NextState,[State|History],
+		      NextEmission,EmissionHistory,EmissionFuture,
+		      ConstraintsOut,UpdConstraints).
+
+
+
+% Sample constraint that just prints the path
+print_path(NextTime, NextState,[State|History],
+	   NextEmission,EmissionHistory,EmissionFuture,
+	   Constraints,Constraints) :-
+	write(path(NextTime,NextState,[State|History],
+		   NextEmission,EmissionHistory,EmissionFuture,
+		   Constraints,Constraints)),
 	nl.
+
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Pre-processing of input sequence and HMM 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 % Initialize time constraints from sequence
 sequence(S) <=> length(S,L) | sequence_length(L), sequence(1,S).
@@ -82,11 +112,16 @@ init, state(State,start) ==>
     emission_history(0,[]),
     time(0),
     nexttime(0),
+    write('backwardsphase'),nl,
+    backwardsphase,
+    write('done'),nl,
     expandphase.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Backwards tracing to see if states can reach end state
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% This is sort of expensive (a lot of rule matches prevented
+% by the guard. TODO: Optimize.
 
 reach_end(Time,State) \ reach_end(Time,State) <=> true.
 
@@ -99,7 +134,7 @@ emit(PrevState,Symbol,_), input(PrevTime,Symbol) ==>
 
 option(explicit_end_states),
 state(S,end), trans(PS,S,_), emit(PS,Symbol,_),
-sequence_length(SL), input(SL,Symbol) ==>
+sequence_length(SL), input(SL,Symbol) \ backwardsphase <=>
    reach_end(SL,PS).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -143,6 +178,21 @@ history_size(HS) \ emission_history(T,EHS) <=>
     prune_history(EHS,HS,PEHS),
     emission_history(T,PEHS).
 
+
+% Maintain emission future window:
+nexttime(T) ==> emission_future(T,T,[]).
+
+% Eliminate when it becomes past
+time(T) \ emission_future(T,_,_) <=> true. 
+
+nexttime(Begin),input(End,Symbol),future_size(FS) \
+emission_future(Begin,End,Sequence) <=>
+    FutureSize is  End - Begin,
+    FutureSize < FS,
+    NewEnd is End + 1
+    |
+    emission_future(Begin,NewEnd,[Symbol|Sequence]).
+
 % Sum multiple paths in the case they have identical history and constraints
 % Note that constraints must occur canonical!
 path(Time,State,History,Constraints,C1), path(Time,State,History,Constraints,C2) <=>
@@ -173,11 +223,14 @@ expand_non_endstate @
 expandphase,
 option(explicit_end_states),
 time(Time),nexttime(NextTime),
-emission_history(Time,EmissionHistory),path(Time,State,History,Constraints,Count),
+emission_history(Time,EmissionHistory), emission_future(NextTime,_,EmissionFuture),
+path(Time,State,History,Constraints,Count),
 trans(State,NextState,_), emit(NextState,Symbol,_),input(NextTime,Symbol),
 sequence_length(SL), reach_end(NextTime,NextState) ==>
     Time < SL,
-    check_path_constraints(NextState,[State|History],EmissionHistory,Constraints,UpdConstraints)
+    check_path_constraints(NextTime,NextState,[State|History],
+			   Symbol,EmissionHistory,EmissionFuture,
+			   Constraints,UpdConstraints)
     |
     path(NextTime,NextState,[State|History],UpdConstraints,Count).
 
@@ -185,9 +238,12 @@ expand_implicit_endstate @
 expandphase,
 option(implicit_end_states),
 time(Time), nexttime(NextTime),
-emission_history(Time,EmissionHistory), path(Time,State,History,Constraints,Count),
+emission_history(Time,EmissionHistory),emission_future(NextTime,_,EmissionFuture),
+path(Time,State,History,Constraints,Count),
 trans(State,NextState,_), emit(NextState,Symbol,_), input(NextTime,Symbol) ==>
-    check_path_constraints(NextState,[State|History],EmissionHistory,Constraints,UpdConstraints)
+    check_path_constraints(NextTime,NextState,[State|History],
+			   Symbol,EmissionHistory,EmissionFuture,
+			   Constraints,UpdConstraints)
     |
     path(NextTime,NextState,[State|History],UpdConstraints,Count).
 
@@ -211,11 +267,11 @@ count(T,S1,S2,C1), count(T,S1,S2,C2) <=>
 
 count_emission @
 countphase, time(T), input(T,Symbol),
-    path(T,State,[PrevState|R],Constraints,Count) ==>
+    path(T,State,_,_,Count) ==>
     count(emit, State, Symbol, Count).
 
 count_transition @
-countphase, time(T), path(T,State,[PrevState|R],Constraints,Count) ==>
+countphase, time(T), path(T,State,[PrevState|_],_,Count) ==>
     count(trans,PrevState,State,Count).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -238,7 +294,6 @@ totalphase \ total(Type,Origin,C1), total(Type,Origin,C2) <=>
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 normphase, total(trans,S1,Total), trans(S1,S2,_), count(trans,S1,S2,Count) ==>
-    write('calc trans probs'),nl,
     Count > 0,
     Total > 0
     |
@@ -256,7 +311,7 @@ normphase, total(emit,State,Total), emit(State,Sym,_), count(emit,State,Sym,Coun
 % Phase control
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-totalphase <=> write('entering norm phase'), nl, normphase.
+totalphase <=> normphase.
 
 % Know when we are done:
 time(T), countphase, sequence_length(SL) <=>
