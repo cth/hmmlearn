@@ -1,0 +1,10 @@
+trans(start,coding,na).
+trans(start,noncoding,na).
+trans(coding,noncoding,na).
+trans(noncoding,coding,na).
+trans(coding,coding,na).
+trans(noncoding,noncoding,na).
+emit(coding,a,na),emit(coding,g,na).
+emit(coding,c,na),emit(coding,t,na).
+emit(noncoding,a,na),emit(noncoding,g,na).
+emit(noncoding,c,na),emit(noncoding,t,na).

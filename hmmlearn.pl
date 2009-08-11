@@ -2,28 +2,34 @@
 
 %:- set_prolog_flag(chr_toplevel_show_store,false).
 
+%:- chr_option(debug,off).
+%:- chr_option(optimize,full).
+
 :- chr_constraint
 	trans/3, emit/3, % Defining the structure of the HMM
+%	trans(+,+,+), emit/3, % Defining the structure of the HMM	
 	sequence/1,  % The training sequence
-	sequence/2,sequence_length/1,input/2, % Derived from traing sequence
+	sequence/2,sequence_length/1, increase_sequence_length/1,
+	input/2, % Derived from traing sequence
 	outputfile/1, progress_indication/1,
 	history_size/1, future_size/1,
 	emission_history/2, emission_future/3,
 	cleanup/1, 
-	time/1, nexttime/1, 
+	iteration/1, nextiteration/1, 
 	% derived from trans relations	
 	state/2,
 	% annotations about limited order of a state	
 	state_order/2, 
 	% Used to record partial paths to reachable states	
 	path/5, reach_end/2, iteration_expansions/2,
-        % Counters	
+    % Counters	
 	count/4, total/3, 
 	% Program phases:
 	countphase/0, expandphase/0, normphase/0, totalphase/0, backwardsphase/0, extractionphase/0,
 	% Final derived probabilities
 	derived_trans/3, derived_emit/3,
-	option/1, start_training/0.
+	option/1, start_training/0,suspend_execution_to_file/2,
+	live/0.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Side constraints
@@ -63,13 +69,11 @@ print_path(NextTime, NextState,[State|History],
 		   Constraints,Constraints)),
 	nl.
 
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Pre-processing of input sequence and HMM 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-
-% Initialize time constraints from sequence
+% Initialize iteration constraints from sequence
 sequence(S) <=> length(S,L) | sequence_length(L), sequence(1,S).
 sequence(_,[]) <=> true. % Recursion termination
 sequence(Time,[Elem|R]) <=> % Add an input constraint for each symbol
@@ -97,22 +101,23 @@ state(X,end), emit(X,_,_) <=>
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % start_training counts
-trans(S1,S2,_P) ==> count(trans,S1,S2,0), total(trans,S1,0).
-emit(S1,Symbol,_P) ==> count(emit,S1,Symbol,0), total(emit,S1,0).
+start_training, trans(S1,S2,_P) ==> count(trans,S1,S2,0), total(trans,S1,0).
+start_training, emit(S1,Symbol,_P) ==> count(emit,S1,Symbol,0), total(emit,S1,0).
 
 % We have implicit end-states unless they are explicit:
 start_training, state(_,end) ==> option(explicit_end_states).
 start_training ==> option(implicit_end_states).
 option(explicit_end_states) \ option(implicit_end_states) <=> true.
 
-% Start state is always path at time 0
-start_training, state(State,start) ==>
+% Start state is always path at iteration 0
+state(State,start) \ start_training <=>
     path(0,State,[],[],1),
     emission_history(0,[]),
-    time(0),
-    nexttime(0),
+    iteration(0),
+    nextiteration(0),
 %    write('backwardsphase'),nl,
-    backwardsphase,
+	live,
+%    backwardsphase,
     write('done'),nl,
     expandphase.
 
@@ -140,33 +145,15 @@ sequence_length(SL), input(SL,Symbol) \ backwardsphase <=>
 % Store management and incremental cleanup
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-time(T), progress_indication(PI) ==> 0 is T mod PI | write('.'), flush.
+input(Iteration,_) \ input(Iteration,_) <=> true.
 
-time(T), sequence_length(SL) ==>
-	OnePercent is SL // 100,
-	0 is T mod OnePercent,
-	T > 0,
-	PercentDone is T // OnePercent
-	|
-	write(PercentDone),write('%'),nl.
+live \ sequence_length(SL), increase_sequence_length(Size) <=>
+	NewSequenceLength is Size + SL,
+	sequence_length(NewSequenceLength).
 
-% Some tracking of the size of the constraint store
-/*
-time(T), sequence_length(SL), input(_,_) ==>
-	OnePercent is SL // 100, 0 is T mod OnePercent, T > 0 | write('+').
-	
-time(T), sequence_length(SL), path(_,_,_,_,_) ==>
-	OnePercent is SL // 100, 0 is T mod OnePercent, T > 0 | write('-').
-	
-time(T), sequence_length(SL), emission_history(_,_) ==>
-	OnePercent is SL // 100, 0 is T mod OnePercent, T > 0 | write('*').
-
-time(T), sequence_length(SL), emission_future(_,_,_) ==>
-	OnePercent is SL // 100, 0 is T mod OnePercent, T > 0 | write('#').
-	
-time(T), sequence_length(SL), count(_,_,_,_) ==>
-	OnePercent is SL // 100, 0 is T mod OnePercent, T > 0 | write('!').
-*/
+%live, iteration(T), progress_indication(PI) ==> 0 is T mod PI | write('.'), flush.
+live, iteration(T), progress_indication(PI) ==> 0 is T mod PI | write(iteration(T)),nl.
+%live, iteration(T), sequence_length(_) ==> write(iteration(T)),nl.
 		
 prune_history(_,0,[]).
 prune_history([],_,[]).
@@ -174,16 +161,16 @@ prune_history([H1|R1],MaxSize,[H1|R2]) :-
 	NewMaxSize is MaxSize - 1,
 	prune_history(R1,NewMaxSize,R2).
 
-time(Time), history_size(HS) ==> Old is Time - HS, HS > 0 | cleanup(Old).
+live, iteration(Time), history_size(HS) ==> Old is Time - HS, HS > 0 | cleanup(Old).
 
-cleanup(Time) \ path(Time,_State,_History,_Constraints,_Count) <=> true.
-cleanup(_) <=> true.
+live \ cleanup(Time), path(Time,_State,_History,_Constraints,_Count) <=> true.
+live \ cleanup(_) <=> true.
 
 % Remove premature end transitions
-sequence_length(EndTime), state(S,end) \ path(Time,S,_,_,_) <=> Time =< EndTime | true.
+live, sequence_length(EndTime), state(S,end) \ path(Time,S,_,_,_) <=> Time =< EndTime | true.
 
 % Keep State history of paths to a windows of history size
-history_size(HS) \ path(Time,State,StateHist,Constraints,Count) <=>
+live, history_size(HS) \ path(Time,State,StateHist,Constraints,Count) <=>
     length(StateHist,StateHistLen),
     StateHistLen > HS
     |
@@ -191,32 +178,27 @@ history_size(HS) \ path(Time,State,StateHist,Constraints,Count) <=>
     path(Time,State,PrunedStateHist,Constraints,Count).
 
 % Maintain a current window of the emission history
-history_size(HS) \ emission_history(T,EHS) <=>
+live, history_size(HS) \ emission_history(T,EHS) <=>
     length(EHS,L),
     L > HS
     |
     prune_history(EHS,HS,PEHS),
     emission_history(T,PEHS).
 
+emission_future(T,T,[]) \ emission_future(T,T,[]) <=> true.
+
 % Maintain emission future window:
-nexttime(T) ==> emission_future(T,T,[]).
+live, nextiteration(T) ==> emission_future(T,T,[]).
 
+live, nextiteration(T) ==> input_sequence(T,Symbol) |	input(T,Symbol).
 
-nexttime(T) ==>
-%	write('getting input symbol for time: '),
-%	write(T),
-%	nl,
-	input_sequence(T,Symbol)
-	|
-	input(T,Symbol).
-	
-time(T) \ input(X,_) <=> X < T | true.
+live, iteration(T) \ input(X,_) <=> X < T | true.
 
 % Eliminate when it becomes past
-time(T) \ emission_future(T,_,_) <=> true. 
-/*
+live, iteration(T) \ emission_future(T,_,_) <=> true. 
 
-nexttime(Begin),input(End,Symbol),future_size(FS) \
+/*
+nextiteration(Begin),input(End,Symbol),future_size(FS) \
 emission_future(Begin,End,Sequence) <=>
 %	write('emission_future attempted applied'),nl,
     FutureSize is  End - Begin,
@@ -228,7 +210,7 @@ emission_future(Begin,End,Sequence) <=>
 
 % Sum multiple paths in the case they have identical history and constraints
 % Note that constraints must occur canonical!
-path(Time,State,History,Constraints,C1), path(Time,State,History,Constraints,C2) <=>
+live \ path(Time,State,History,Constraints,C1), path(Time,State,History,Constraints,C2) <=>
     C is C1 + C2,
     path(Time,State,History,Constraints,C).
 
@@ -242,28 +224,53 @@ state_order(State,Order),
    path(Time,State,SharedHistory,C).
 */
 
-time(T) \ nexttime(T) <=> NextTime is T + 1, nexttime(NextTime).
+live, iteration(T) \ nextiteration(T) <=> NextTime is T + 1, nextiteration(NextTime).
 
-time(T), input(T,S) \ emission_history(OldT,EHS) <=>
+live, iteration(T), input(T,S) \ emission_history(OldT,EHS) <=>
     OldT < T | emission_history(T, [S|EHS]).
+
+live, iteration(T1) \ iteration_expansions(T0,_) <=> T0 < T1 | true.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Suspension of execution
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+report_constraints([]).
+report_constraints([live|Constraints]) :-
+	report_constraints(Constraints), !.
+report_constraints([C|Constraints]) :-
+        write_canonical(C),
+        write('.'),
+        nl,
+        report_constraints(Constraints).
+
+iteration(T), countphase \ suspend_execution_to_file(T,SuspendFile) <=>
+    flush,
+	tell(SuspendFile),
+	findall(C,find_chr_constraint(C),Constraints),
+	report_constraints(Constraints),
+	told,
+	flush,
+	halt.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Expand phase:
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-expandphase,time(T) ==> iteration_expansions(T,0).
+live, expandphase,iteration(T) ==> iteration_expansions(T,0).
 
 % Count how many paths we extend in this iteration
-iteration_expansions(T,A), iteration_expansions(T,B) <=>
+live \ iteration_expansions(T,A), iteration_expansions(T,B) <=>
     C is A + B,
 	iteration_expansions(T,C).
 
 % Find all path next states (preserve duplicates).
 expand_non_endstate @
+live,
 expandphase,
 option(explicit_end_states),
-time(Time),
-nexttime(NextTime),
+iteration(Time),
+nextiteration(NextTime),
 emission_history(Time,EmissionHistory), 
 emission_future(NextTime,_,EmissionFuture),
 path(Time,State,History,Constraints,Count),
@@ -281,10 +288,11 @@ reach_end(NextTime,NextState) ==>
     path(NextTime,NextState,[State|History],UpdConstraints,Count).
 
 expand_implicit_endstate @
+live,
 expandphase,
 option(implicit_end_states),
-time(Time), 
-nexttime(NextTime),
+iteration(Time), 
+nextiteration(NextTime),
 input(NextTime,Symbol),
 emission_history(Time,EmissionHistory),
 emission_future(NextTime,_,EmissionFuture),
@@ -298,9 +306,8 @@ emit(NextState,Symbol,_) ==>
 	iteration_expansions(Time,1),
     path(NextTime,NextState,[State|History],UpdConstraints,Count).
 
-
 % Special case for special end-state transitions when we have explicit end states:
-expandphase, time(Time), nexttime(NextTime),
+live, expandphase, iteration(Time), nextiteration(NextTime),
 sequence_length(Time), state(NextState,end), trans(State,NextState,_),
 path(Time,State,History,Constraints,Count) ==>
     write('extending path to end state'),
@@ -318,11 +325,11 @@ count(T,S1,S2,C1), count(T,S1,S2,C2) <=>
     count(T,S1,S2,C).
 
 count_emission @
-countphase, time(T), input(T,Symbol), path(T,State,_,_,Count) ==>
+countphase, iteration(T), input(T,Symbol), path(T,State,_,_,Count) ==>
     count(emit, State, Symbol, Count).
 
 count_transition @
-countphase, time(T), path(T,State,[PrevState|_],_,Count) ==>
+countphase, iteration(T), path(T,State,[PrevState|_],_,Count) ==>
     count(trans,PrevState,State,Count).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -362,46 +369,44 @@ normphase, total(emit,State,Total), emit(State,Sym,_), count(emit,State,Sym,Coun
 % Model extraction
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-extractionphase, outputfile(File) ==>
+live, extractionphase, outputfile(File) ==>
 	nl,
 	write('Writing derived probabilities to file: '),
 	write(File),
 	nl,
 	tell(File).
 
-extractionphase \ derived_trans(S1,S2,Probability) <=>
+live, extractionphase \ derived_trans(S1,S2,Probability) <=>
 	write(trans(S1,S2,Probability)), write('.'), nl.
 	
-extractionphase \ derived_emit(State,Symbol,Probability) <=>
+live, extractionphase \ derived_emit(State,Symbol,Probability) <=>
 	write(emit(State,Symbol,Probability)), write('.'), nl.
 
-extractionphase <=>	told.
+live \ extractionphase <=>	told.
 	
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Phase control
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-totalphase <=> normphase.
+live \ totalphase <=> normphase.
 
-normphase <=> extractionphase.
+live \ normphase <=> extractionphase.
 
 % Know when we are done:
-time(T), countphase, sequence_length(SL) <=>
+live \ iteration(T), countphase, sequence_length(SL) <=>
     T > SL |
-%    write(normphase(T)),nl,
     totalphase.
 
 % Stop if no extensions where made in last expand-phase
 
-sequence_length(SL) \ time(T), expandphase <=>
+live, sequence_length(SL) \ iteration(T), expandphase <=>
     T =< SL,
     NewT is T + 1
     |
-    time(NewT),
-%    write(countphase(NewT)),nl,
+    iteration(NewT),
     countphase.
 
-countphase, time(T) \ iteration_expansions(T1,0) <=> 
+live, countphase, iteration(T) \ iteration_expansions(T1,0) <=> 
 	T1 < T
 	|
 	write('No possible expansions in iteration '),
@@ -409,8 +414,7 @@ countphase, time(T) \ iteration_expansions(T1,0) <=>
 	nl,
 	halt.
 
-time(T), sequence_length(SL) \ countphase <=>
-    T =< SL
+live, iteration(T), sequence_length(SL) \ countphase <=>
+    T =< SL 
     |
-%    write(expandphase(T)),nl,
     expandphase.

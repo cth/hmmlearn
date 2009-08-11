@@ -1,0 +1,6 @@
+digraph {
+	expandphase -> countphase
+	countphase -> totalphase
+	totalphase -> normphase
+	normphase -> extractionphase
+}

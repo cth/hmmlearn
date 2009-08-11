@@ -1,0 +1,136 @@
+\documentclass{article}
+
+\title{HMMLEARN}
+\author{Christian Theil Have\\ cth@ruc.dk}
+
+\begin{document}
+
+\maketitle
+
+
+\section{Manual}
+
+\subsection{Introduction}
+
+\texttt{hmmlearn} is a CHR program for deriving the parameters for a HMMs (and constrained HMMs) using empirical relative frequency (counting). 
+
+A constraint-based approach is used to specify the relationship between the training data and the model.
+
+The program is able to train on quite large sets of training-data by chunking it and performing the training piecewise and assembling the result.
+
+\subsection{Usage}
+
+The program is used by invocation of the \texttt{trainhmm.sh} shell script. The shell script takes a number of arguments: 
+\begin{verbatim}
+ Train a HMM on a particular input sequence
+ The program expects following arguments:
+ 1: A HMM definition file 
+ 2: An input data file
+ 3: User constraints file
+ 4: An output file for saving the trained HMM 
+ 5: The chunk size to use
+ 6: History size (optional, default=0)
+ 7: Future window (optional, default=0)
+\end{verbatim}
+
+The first argument is a definition file, specifying the structure of the HMM to be trained. The format of this file is explained in section \ref{sec:hmmspec}.
+
+The second argument is the path to a file containing training data. How to specify this file is explained in section \ref{sec:training_data_file}. 
+
+In the third argument, a file containing user constraints is specified. These user constraints are Prolog goals relating the training data to the HMM. How to write 
+such constraints is explained in section \ref{sec:user_constraints}.
+
+The fourth argument, the output file, is a path to a file which will contain the trained HMM with relevant parameters after the program terminates.
+The file will be overwritten if it already exists, otherwise it will be created. 
+
+The fifth argument is the \emph{chunk size} to use: This is a specification of how many goals from the input file will be trained on in each iteration of the training process.
+Setting this to the number of goals in the training set means that training will be done in one iteration. This is fine for shorter sequences - say 10000 goals. For larger sequences,
+the chunk-size should be set to something less than this, to limit memory and stack usage. With to large a chunk-size, Prolog may run out of stack space.
+
+The sixth argument, the history size (an integer), is used to keep track of the last part of a path leading to a particular state in the counting process. This is relevant for 
+higher-order Markov models, where state transitions depend on previous states. Limitations of such transitions are specified through the user constraints file (section \ref{sec:user_constraints}).
+
+The seventh argument (an integer) decides the size of the future window exposed to constraints restricting transitions. This makes it possible to do forward checking, for instance, to eliminate certain 
+dead-end transitions.
+
+\subsubsection{HMM specification}
+\label{sec:hmmspec}
+
+The HMM is specified as a Prolog program. The structure definition file contains facts defining transitions between states and emissions of states.
+Additionally, their probabilities of such transitions can be specified.
+
+Transitions are specified using the goal, \texttt{trans/3}, where the first argument refers to the from-state, the second refers to the to-state and the third argument
+is the probability of the transition. A dummy value, such as \texttt{unknown},  may be used for the probability, since this will usually be unknown beforehand. 
+
+Emissions are specified using the goal, \texttt{emit/3}, where the first argument is the emitting state, the second is the symbol emitted and the third is a probability. 
+Again, the probability can be replaced by a dummy value.
+
+The format of the file is also used for the output file, except that every goal will have an updated probability associated.
+
+\subsubsection{Training data}
+\label{sec:training_data_file}
+
+The training data is specified as Prolog goals on the form, \texttt{input/2}. The first argument is an integer specifying position in the input stream, starting from 1. The second 
+argument is an atom representing a particular input symbol.
+
+If the data is not in this form a goal \texttt{input/2} that the input to this form can be specifed in the user constraints file.
+
+Note that for chunking to work properly, the input goals must occur in ascending sequential order. 
+
+\subsubsection{User constraints}
+\label{sec:user_constraints}
+
+The user constraints are used to map inputs to particular states of the HMM. A special fact \texttt{user\_constraints/1} must be defined.
+The argument of this fact is a list of constraint goals, which should be checked before state transitions may occur. The constraint goals
+will be called in the order specified in the list.
+
+A user constraint goal has the form, 
+
+\begin{verbatim}
+constraint_goal(NextInputPosition, NextState, StateHistory,
+   NextEmission, EmissionHistory, EmissionFuture,
+   InConstraints, OutConstraints) :- 
+    ... 
+\end{verbatim}
+
+When the goal is called, all but the last argument are instantiated (ground). The goal is called each time a state transition is attempted: If the goal succeeds, 
+then the state transition is made, otherwise, it is not.
+
+\texttt{NextInputPosition} is an integer representing the position in input stream of the input symbol to be emitted from the \emph{to-state} of the state transition.
+\texttt{NextState} is the \emph{to-state} of the transition. 
+
+The third argument is a list of recently visited states. The most recently visited (the current \emph{from-state}) will be the first element of the list and so forth. The
+number of elements in this lists is determined by the \emph{history size}, which is specified as a command-line argument.
+
+\texttt{NextEmission} contains the next symbol to be emitted.
+
+\texttt{EmissionHistory} is a list of recent emission symbols. More recent emissions are in the front of the list. 
+
+\texttt{EmissionFuture} is a sequence of emissions to come \emph{after the next emission}. The size of the list is the determined be the \emph{future window} 
+command-line argument.
+
+\texttt{InConstraints} is a user-maintained and specified constraint-store. With this, it is possible to maintain some state, such as counting etc. The \texttt{OutConstraints} 
+should contain unify with an updated constraint store after invocation.
+
+\subsection{An example HMM training program}
+
+\section{Technical details}
+
+This section outlines some of the technical details of the program which are not essential for 
+the usage of the program, but might be beneficial should one wish to modify the program.
+
+\subsection{The controlling shell-script}
+
+The invocation of the program is normally done through a shell-script, \texttt{trainhmm.sh}, which does command-line argument passing,
+some bootstrapping and in turn invokes the Prolog interpreter to actually run the CHR program.
+
+The shell-script will first attempt to split the data-file into chunks of the size specified.  It generates a Prolog file \texttt{chunksplit.pl} and invokes
+this program. The Prolog program does the actual work of writing data files which only contains fixed size chunks of the original data-file.
+
+After chunking is complete a "trainer" program is generated. This program is then invoked for each chunk in sequence. Actually, a temporary 
+chunk file, containing just a bit (corresponding to specified future size) of the next chunk is generated and training is done on this chunk. This 
+is necessary to make sure that the training program can perform needed look-aheads near the end of the chunk.
+
+Finally, after training has commenced for all chunks, the shells script will clean up temporary files such as the chunked data files. 
+
+\end{document}
