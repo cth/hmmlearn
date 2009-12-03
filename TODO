@@ -1,0 +1,10 @@
+BUGS:
+- none known...
+
+- Documentation
+	- Manual (usage etc)
+	- Technical details (hackers guide)
+
+
+DONE:
+- Rewrite chunker in Ruby or shell script to avoid Prolog stack overflows
