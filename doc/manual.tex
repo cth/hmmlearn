@@ -43,7 +43,8 @@ such constraints is explained in section \ref{sec:user_constraints}.
 The fourth argument, the output file, is a path to a file which will contain the trained HMM with relevant parameters after the program terminates.
 The file will be overwritten if it already exists, otherwise it will be created. 
 
-The fifth argument is the \emph{chunk size} to use: This is a specification of how many goals from the input file will be trained on in each iteration of the training process.
+The program supports splitting up the training so that only a part of the training data (a chunk) is considered at a time, and the preliminary results written to a file.
+This is a way of limiting the stack and memoryusage of the program, primarily designed to get around the annoyingly small stack size in SWI Prolog. The fifth argument is the \emph{chunk size} to use: This is a specification of how many "emission goals" from the input file will be trained on in each chunked iteration of the training process.
 Setting this to the number of goals in the training set means that training will be done in one iteration. This is fine for shorter sequences - say 10000 goals. For larger sequences,
 the chunk-size should be set to something less than this, to limit memory and stack usage. With to large a chunk-size, Prolog may run out of stack space.
 
@@ -65,6 +66,12 @@ is the probability of the transition. A dummy value, such as \texttt{unknown},  
 Emissions are specified using the goal, \texttt{emit/3}, where the first argument is the emitting state, the second is the symbol emitted and the third is a probability. 
 Again, the probability can be replaced by a dummy value.
 
+There are some restrictions on the specification of the HMM. There must be one unique start-state, which is a state with the following properties:
+\begin{itemize}
+\item There is no transitions to the start-state.
+\item There must be at least one outgoing transition from the start-state.
+\end{itemize}
+
 The format of the file is also used for the output file, except that every goal will have an updated probability associated.
 
 \subsubsection{Training data}
@@ -75,7 +82,7 @@ argument is an atom representing a particular input symbol.
 
 If the data is not in this form a goal \texttt{input/2} that the input to this form can be specifed in the user constraints file.
 
-Note that for chunking to work properly, the input goals must occur in ascending sequential order. 
+Note that for chunking to work properly, the input goals must occur in ascending sequential order.
 
 \subsubsection{User constraints}
 \label{sec:user_constraints}
@@ -94,7 +101,7 @@ constraint_goal(NextInputPosition, NextState, StateHistory,
 \end{verbatim}
 
 When the goal is called, all but the last argument are instantiated (ground). The goal is called each time a state transition is attempted: If the goal succeeds, 
-then the state transition is made, otherwise, it is not.
+then the state transition is counted, otherwise, it is not.
 
 \texttt{NextInputPosition} is an integer representing the position in input stream of the input symbol to be emitted from the \emph{to-state} of the state transition.
 \texttt{NextState} is the \emph{to-state} of the transition. 
@@ -132,5 +139,19 @@ chunk file, containing just a bit (corresponding to specified future size) of th
 is necessary to make sure that the training program can perform needed look-aheads near the end of the chunk.
 
 Finally, after training has commenced for all chunks, the shells script will clean up temporary files such as the chunked data files. 
+
+\section{Direction and future ideas}
+
+\subsection{Boosting and weighted samples}
+
+It is my intention to built into this training tool a method for boosting similar to the approach taken with decision trees. ERF estimates are
+maximum likelihood estimates, meaning that the probability $P(model|traning-examples)$ will be optimized. In reality, what we often want
+ for the HMM to be able be optimized to give the best precision and recall given for our data.
+ 
+I still need to work out how the details of this is going to work.
+
+\subsection{Viterbi training}
+
+Instead of doing Baum-Welch training, I would like the program to be able to do Viterbi based training for unannotated examples.
 
 \end{document}

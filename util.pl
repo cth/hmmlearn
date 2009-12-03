@@ -109,7 +109,7 @@ load_store(InputStream) :-
 		close(InputStream)
     ;
 		%write('inserting constraint: '),
-		write_canonical(T),nl,
+		%write_canonical(T),nl,
 		T,
 		load_store(InputStream)
     ).

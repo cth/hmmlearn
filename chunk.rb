@@ -61,5 +61,3 @@ class Chunker
 end
 
 Chunker.new(ARGV[0],ARGV[1])
-
-

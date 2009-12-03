@@ -1,6 +1,6 @@
 :- use_module(library(chr)).
 
-%:- set_prolog_flag(chr_toplevel_show_store,false).
+:- set_prolog_flag(chr_toplevel_show_store,false).
 
 %:- chr_option(debug,off).
 %:- chr_option(optimize,full).
@@ -190,7 +190,7 @@ emission_future(T,T,[]) \ emission_future(T,T,[]) <=> true.
 % Maintain emission future window:
 live, nextiteration(T) ==> emission_future(T,T,[]).
 
-live, nextiteration(T) ==> input_sequence(T,Symbol) |	input(T,Symbol).
+live, nextiteration(T) ==> input_sequence(T,Symbol) | input(T,Symbol).
 
 live, iteration(T) \ input(X,_) <=> X < T | true.
 

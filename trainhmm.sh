@@ -1,6 +1,6 @@
 #!/bin/sh
 
-PROLOG="swipl -L128M -G128M"
+PROLOG="swipl -L0 -G0"
 PROLOG="swipl"
 RUBY="/usr/bin/ruby"
 
